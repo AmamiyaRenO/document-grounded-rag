@@ -227,8 +227,8 @@ Live outputs for all five required scenarios are in
 The automated suite (`tests/`) asserts these behaviors plus guardrail, evidence-gate,
 chunking, and logging unit tests (32 tests, all passing, fully offline).
 
-An expanded 19-question boundary evaluation set is documented in
-[`docs/boundary_cases.md`](docs/boundary_cases.md) and can be regenerated with
+An expanded 19-question boundary evaluation set is included in
+[`docs/api_examples.md`](docs/api_examples.md) and can be regenerated with
 `uv run python scripts/run_boundary_cases.py`. It includes negated symptoms, hypotheticals,
 paraphrased emergencies, individualized medication questions, off-corpus questions, vague
 questions, and an answerability failure demo.
