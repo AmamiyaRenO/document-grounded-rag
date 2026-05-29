@@ -16,6 +16,9 @@ from hfpef_rag import config, logging_store
 def offline_and_isolated_logs(tmp_path, monkeypatch):
     # Force the deterministic fallback regardless of any local .env / API key.
     monkeypatch.setattr(config.settings, "openai_api_key", None)
+    # Keep routine tests offline. Answerability behavior is tested explicitly
+    # with mocks in test_api.py.
+    monkeypatch.setattr(config.settings, "answerability_check_enabled", False)
     # Keep routine tests fully offline; semantic guardrail behavior is tested
     # explicitly with mocks in test_guardrails.py / test_api.py.
     monkeypatch.setattr(config.settings, "semantic_guardrail_enabled", False)

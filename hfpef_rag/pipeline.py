@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 import uuid
 
+from .answerability import assess_answerability
 from .config import settings
 from .evidence import INSUFFICIENT_MESSAGE, assess_evidence
 from .generator import generate_answer
@@ -49,6 +50,19 @@ def _guardrail_log_fields(guardrail) -> dict[str, object]:
     return fields
 
 
+def _answerability_log_fields(answerability) -> dict[str, object]:
+    fields: dict[str, object] = {
+        "answerability_checked": answerability.checked,
+        "answerability_sufficient": answerability.sufficient,
+        "answerability_reason": answerability.reason,
+    }
+    if answerability.model_name:
+        fields["answerability_model"] = answerability.model_name
+    if answerability.prompt_summary:
+        fields["answerability_prompt_summary"] = answerability.prompt_summary
+    return fields
+
+
 def answer_question(question: str) -> AskResponse:
     started = time.perf_counter()
     request_id = str(uuid.uuid4())
@@ -73,6 +87,9 @@ def answer_question(question: str) -> AskResponse:
                 "retrieved": [],
                 "evidence_sufficient": False,
                 "evidence_reason": "guardrail_short_circuit",
+                "answerability_checked": False,
+                "answerability_sufficient": False,
+                "answerability_reason": "guardrail_short_circuit",
                 "guardrail_triggered": True,
                 **_guardrail_log_fields(guardrail),
                 "answer": response.answer,
@@ -111,6 +128,9 @@ def answer_question(question: str) -> AskResponse:
                 "evidence_sufficient": False,
                 "evidence_reason": decision.reason,
                 "best_score": decision.best_score,
+                "answerability_checked": False,
+                "answerability_sufficient": False,
+                "answerability_reason": "similarity_gate_failed",
                 "guardrail_triggered": False,
                 **_guardrail_log_fields(guardrail),
                 "answer": response.answer,
@@ -121,7 +141,34 @@ def answer_question(question: str) -> AskResponse:
         )
         return response
 
-    # 4. Generate grounded answer.
+    # 4. Optional answerability check.
+    answerability = assess_answerability(question, results)
+    if not answerability.sufficient:
+        response = AskResponse(
+            answer=INSUFFICIENT_MESSAGE,
+            evidence_used=_evidence_items(results),
+            evidence_sufficient=False,
+            guardrail_triggered=False,
+        )
+        write_log(
+            {
+                **base_log,
+                "retrieved": retrieved_log,
+                "evidence_sufficient": False,
+                "evidence_reason": "answerability_gate_failed",
+                "best_score": decision.best_score,
+                **_answerability_log_fields(answerability),
+                "guardrail_triggered": False,
+                **_guardrail_log_fields(guardrail),
+                "answer": response.answer,
+                "model_name": None,
+                "prompt_summary": None,
+                "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+            }
+        )
+        return response
+
+    # 5. Generate grounded answer.
     generation = generate_answer(question, results)
     response = AskResponse(
         answer=generation.answer,
@@ -130,7 +177,7 @@ def answer_question(question: str) -> AskResponse:
         guardrail_triggered=False,
     )
 
-    # 5. Log everything.
+    # 6. Log everything.
     write_log(
         {
             **base_log,
@@ -138,6 +185,7 @@ def answer_question(question: str) -> AskResponse:
             "evidence_sufficient": True,
             "evidence_reason": decision.reason,
             "best_score": decision.best_score,
+            **_answerability_log_fields(answerability),
             "guardrail_triggered": False,
             **_guardrail_log_fields(guardrail),
             "answer": response.answer,

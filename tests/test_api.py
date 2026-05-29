@@ -10,8 +10,9 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from hfpef_rag import config, guardrails, logging_store
+from hfpef_rag import answerability, config, guardrails, logging_store
 from hfpef_rag.app import app
+from hfpef_rag.answerability import AnswerabilityDecision
 from hfpef_rag.guardrails import SemanticRiskResult
 
 
@@ -102,6 +103,9 @@ def test_each_query_appends_a_log_record(client):
         "evidence_sufficient",
         "guardrail_triggered",
         "guardrail_source",
+        "answerability_checked",
+        "answerability_sufficient",
+        "answerability_reason",
         "answer",
         "model_name",
     ):
@@ -134,3 +138,62 @@ def test_semantic_guardrail_escalates_and_logs_metadata(client, monkeypatch):
     assert record["semantic_guardrail_model"] == "qwen3:8b"
     assert record["semantic_guardrail_risk"] == "emergency"
     assert record["semantic_guardrail_confidence"] == 0.93
+
+
+def test_answerability_allows_answerable_hfpef_question(client, monkeypatch):
+    monkeypatch.setattr(config.settings, "answerability_check_enabled", True)
+
+    def assess(question, results):
+        assert question == "What is HFpEF?"
+        return AnswerabilityDecision(
+            checked=True,
+            sufficient=True,
+            reason="Evidence defines HFpEF directly.",
+            model_name="mock-answerability",
+            prompt_summary="mock prompt",
+        )
+
+    monkeypatch.setattr(answerability, "assess_answerability", assess)
+    monkeypatch.setattr("hfpef_rag.pipeline.assess_answerability", assess)
+
+    body = _ask(client, "What is HFpEF?")
+
+    assert body["evidence_sufficient"] is True
+    assert body["guardrail_triggered"] is False
+
+    record = json.loads(logging_store.LOG_FILE.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["answerability_checked"] is True
+    assert record["answerability_sufficient"] is True
+    assert record["answerability_reason"] == "Evidence defines HFpEF directly."
+
+
+def test_answerability_refuses_topically_similar_but_unanswered_question(
+    client, monkeypatch
+):
+    monkeypatch.setattr(config.settings, "answerability_check_enabled", True)
+
+    def assess(question, results):
+        assert question == "Can HFpEF be cured with vitamin supplements?"
+        return AnswerabilityDecision(
+            checked=True,
+            sufficient=False,
+            reason="Retrieved evidence discusses HFpEF treatment but does not support a cure with vitamin supplements.",
+            model_name="mock-answerability",
+            prompt_summary="mock prompt",
+        )
+
+    monkeypatch.setattr(answerability, "assess_answerability", assess)
+    monkeypatch.setattr("hfpef_rag.pipeline.assess_answerability", assess)
+
+    body = _ask(client, "Can HFpEF be cured with vitamin supplements?")
+
+    assert body["guardrail_triggered"] is False
+    assert body["evidence_sufficient"] is False
+    assert "don't have enough information" in body["answer"]
+    assert body["evidence_used"]
+
+    record = json.loads(logging_store.LOG_FILE.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["evidence_reason"] == "answerability_gate_failed"
+    assert record["answerability_checked"] is True
+    assert record["answerability_sufficient"] is False
+    assert "vitamin supplements" in record["answerability_reason"]

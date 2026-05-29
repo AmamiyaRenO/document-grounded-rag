@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.2
     llm_max_tokens: int = 500
 
+    # --- Optional evidence answerability check ---------------------------------
+    # Runs after the similarity gate passes and before answer generation. It asks
+    # whether the retrieved evidence actually answers the user's question, since
+    # topical similarity is not the same as answerability.
+    answerability_check_enabled: bool = True
+    answerability_model: str | None = None
+    answerability_temperature: float = 0.0
+    answerability_max_tokens: int = 250
+
     # --- Safety guardrail semantic classifier ---------------------------------
     # Regex remains the deterministic hard gate. When enabled, this optional
     # offline classifier runs only after regex does not match, and fails open if

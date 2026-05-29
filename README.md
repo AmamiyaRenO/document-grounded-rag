@@ -28,10 +28,13 @@ question
 3. Evidence sufficiency gate ──(too weak?)──► safe refusal, no fabricated answer
    │ sufficient
    ▼
-4. Generate grounded answer (OpenAI gpt-4o-mini, or deterministic fallback)
+4. Optional answerability check ──(not answerable?)──► safe refusal
+   │ answerable
+   ▼
+5. Generate grounded answer (OpenAI gpt-4o-mini, or deterministic fallback)
    │
    ▼
-5. Log the full record (JSONL)  ──►  return { answer, evidence_used, flags }
+6. Log the full record (JSONL)  ──►  return { answer, evidence_used, flags }
 ```
 
 Response shape (matches the assignment spec):
@@ -133,6 +136,15 @@ If either fails, the system returns a safe refusal (`evidence_sufficient: false`
 generating an answer. Requiring a strong top hit *and* corroboration avoids answering from a
 single, marginal match.
 
+Similarity is only the first evidence gate. It can find chunks that are topically close to a
+question without proving that those chunks actually answer the specific claim. For example,
+"Can HFpEF be cured with vitamin supplements?" may retrieve HFpEF treatment chunks because
+the terms are related, but those chunks do not establish a vitamin cure. When
+`HFPEF_ANSWERABILITY_CHECK_ENABLED=true` and an OpenAI key is configured, the app runs an
+optional answerability check after the similarity gate and before answer generation. If the
+LLM classifies the retrieved evidence as not answerable, the app returns the same safe
+refusal rather than generating from merely related text.
+
 Thresholds live in [`hfpef_rag/config.py`](hfpef_rag/config.py) (overridable via `HFPEF_*`
 env vars) and were **calibrated against the bundled documents** using
 `scripts/inspect_retrieval.py`. With `all-MiniLM-L6-v2`, on-topic questions score ~0.6–0.7 at
@@ -187,6 +199,7 @@ contains:
 - `question` (the user's text)
 - `retrieved` — document IDs, chunk IDs, titles, and similarity scores
 - `evidence_sufficient` and `evidence_reason` (and `best_score`)
+- `answerability_checked`, `answerability_sufficient`, and `answerability_reason`
 - `guardrail_triggered`, `guardrail_source`, and matched terms when a safety layer fires
 - semantic guardrail details when available: model, risk label, confidence, reason, or error
 - `answer` (the final response text)
@@ -211,7 +224,7 @@ Live outputs for all five required scenarios are in
 | 5 | Vague / ambiguous | "What about my heart?" | safe refusal, no false escalation |
 
 The automated suite (`tests/`) asserts these behaviors plus guardrail, evidence-gate,
-chunking, and logging unit tests (28 tests, all passing, fully offline).
+chunking, and logging unit tests (30 tests, all passing, fully offline).
 
 ---
 
@@ -247,9 +260,9 @@ hfpef-rag/
   model — they would need re-calibration for any other content.
 - **Similarity ≠ answerability.** A question can be topically close to the documents yet not
   actually answered by them (e.g. "Can HFpEF be cured with vitamin supplements?" scores 0.52
-  and passes the gate even though supplements aren't discussed). A pure-similarity gate can't
-  catch this; the LLM prompt is the second line of defense, but the deterministic fallback is
-  not.
+  and passes the similarity gate even though a vitamin cure is not supported). The optional
+  answerability check is a second line of defense when an LLM is available, but it is still a
+  prototype classifier rather than a formal clinical evidence review.
 - **Prototype guardrails.** Regex is auditable but shallow, while the optional Ollama/Qwen
   classifier can still misclassify, may add latency, and depends on local model availability.
 - **Deterministic fallback is extractive.** Without an API key, answers are stitched-together
