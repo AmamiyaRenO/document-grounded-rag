@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual env / uv (uv.lock is committed for reproducibility)
+.venv/
+
+# Environment
+.env
+
+# Runtime research logs (a sample copy lives in docs/sample_research_log.jsonl)
+logs/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
