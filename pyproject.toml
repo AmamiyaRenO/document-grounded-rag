@@ -1,0 +1,33 @@
+[project]
+name = "hfpef-rag"
+version = "0.1.0"
+description = "Document-grounded RAG backend for an HFpEF / cardio-kidney-metabolic patient-education assistant, with an evidence-sufficiency gate, safety guardrails, and research logging."
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "python-dotenv>=1.0",
+    "sentence-transformers>=3.0",
+    "faiss-cpu>=1.8",
+    "numpy>=1.26",
+    "openai>=1.40",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "httpx>=0.27",
+]
+
+# Treat this as a "virtual" project: uv manages the environment / dependencies
+# but does not build-and-install the local package. The package is importable
+# from the project root (flat layout), so `uvicorn hfpef_rag.app:app` and
+# pytest both work without an editable install.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
