@@ -298,16 +298,13 @@ hfpef-rag/
 
 - **Tools used:** Claude Code (Anthropic) and Codex / ChatGPT were used as
   AI-assisted planning and pair-programming tools during development.
-- **What it was used for:** scaffolding the project structure, drafting the FastAPI
-  boilerplate, the chunking/retrieval/guardrail/evidence/logging modules, the sample
-  documents, the test suite, reviewing the implementation plan, and drafting this README.
-- **Which parts were AI-assisted:** essentially all of the initial code, sample documents, and
-  documentation drafts were AI-assisted.
-- **What I personally reviewed, modified, and validated:** I reviewed and understand every
-  module; I ran the retrieval calibration and **set the evidence-gate thresholds** based on
-  the observed score distribution; I verified the five required scenarios end-to-end; I ran
-  and confirmed the test suite; and I validated that the sample documents are accurate,
-  conservative, and appropriately disclaimed. I can explain any part of the submission in
+- **What it was used for:** initial scaffolding, implementation drafts, documentation drafts,
+  and review of the architecture and edge cases.
+- **Which parts were AI-assisted:** parts of the project structure, implementation drafts,
+  tests, sample-document wording, and documentation were AI-assisted.
+- **What I personally reviewed, modified, and validated:** I personally reviewed, modified,
+  tested, and validated the final code, thresholds, guardrail behavior, answerability behavior,
+  sample outputs, research logs, and documentation. I can explain any part of the submission in
   detail.
 
 ### Sample documents — sources

@@ -131,3 +131,42 @@ evidence gate (top score 0.263) and is refused with a request to be more specifi
   "guardrail_triggered": false
 }
 ```
+
+---
+
+## 6. Answerability failure demo
+
+This extra demo shows why semantic similarity is not the same as answerability. The question
+is topically close to the HFpEF treatment documents, so retrieval can return treatment chunks,
+but the evidence does **not** directly support a claim that vitamins can cure HFpEF. With the
+optional answerability check enabled, the system refuses instead of generating an unsupported
+answer.
+
+**Request**
+```json
+{ "question": "Can HFpEF be cured with vitamin supplements?" }
+```
+**Response**
+```json
+{
+  "answer": "I don't have enough information in my reference documents to answer that reliably, so I'd rather not guess. The documents I can draw on cover HFpEF basics, treatment options, cardiovascular-kidney-metabolic health, warning signs, and questions to ask your doctor. You could try rephrasing your question around one of those topics, or ask your clinician or pharmacist, who can give advice specific to you.",
+  "evidence_used": [
+    { "document_id": "doc_2", "chunk_id": "chunk_0", "similarity_score": 0.52 },
+    { "document_id": "doc_2", "chunk_id": "chunk_1", "similarity_score": 0.47 },
+    { "document_id": "doc_5", "chunk_id": "chunk_2", "similarity_score": 0.44 }
+  ],
+  "evidence_sufficient": false,
+  "guardrail_triggered": false
+}
+```
+
+Research-log excerpt for this case:
+
+```json
+{
+  "evidence_reason": "answerability_gate_failed",
+  "answerability_checked": true,
+  "answerability_sufficient": false,
+  "answerability_reason": "Retrieved evidence discusses HFpEF treatment but does not support a cure with vitamin supplements."
+}
+```
