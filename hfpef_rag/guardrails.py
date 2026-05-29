@@ -1,17 +1,23 @@
 """Safety guardrail: detect urgent / high-risk queries.
 
-This runs *before* retrieval and generation. If the question matches a red-flag
-pattern, the system returns a fixed escalation message and gives no medical advice.
+This runs *before* retrieval and generation. The first layer is a deterministic
+regex hard gate. If regex does not match, an optional offline semantic classifier
+can ask a local Ollama model whether the question implies emergency risk.
 
-Design note / limitation: this is intentionally a simple, auditable keyword/regex
-matcher. It does not understand negation ("I do NOT have chest pain") or nuanced
-context. For a safety gate we accept that bias toward over-escalation.
+Design note / limitation: both layers are safety aids, not medical triage. Regex
+is auditable but shallow; the semantic layer can catch paraphrases, but it may
+misclassify and therefore fails open on infrastructure or parsing errors.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from typing import Any
+from urllib import error, request
+
+from .config import settings
 
 # Each pattern is matched case-insensitively with word boundaries where appropriate.
 # Patterns target the emergency symptoms named in the task plus common red flags.
@@ -70,12 +76,136 @@ class GuardrailResult:
     triggered: bool
     matched_terms: list[str]
     message: str | None = None
+    source: str = "none"
+    semantic_risk: str | None = None
+    semantic_confidence: float | None = None
+    semantic_reason: str | None = None
+    semantic_error: str | None = None
+
+
+@dataclass
+class SemanticRiskResult:
+    risk: str
+    confidence: float
+    matched_concepts: list[str]
+    reason: str
+
+
+SEMANTIC_PROMPT_TEMPLATE = """You are a safety classifier for a document-grounded health education assistant.
+
+Classify whether the user's message describes current or imminent emergency/high-risk symptoms that should receive an emergency escalation message instead of normal educational RAG.
+
+Emergency/high-risk examples include chest pain or pressure, severe shortness of breath, fainting, severe dizziness, stroke symptoms, coughing up blood, blue lips, severe allergic reaction/anaphylaxis, suicidal ideation, or explicitly asking whether to call emergency services.
+
+Do not answer the user's medical question. Return only strict JSON with this schema:
+{{"risk":"emergency|non_urgent|uncertain","confidence":0.0,"matched_concepts":["short concept"],"reason":"short explanation"}}
+
+Use "emergency" only for likely current or imminent high-risk symptoms. Use "non_urgent" for general education questions. Use "uncertain" when the wording is too ambiguous.
+
+User message:
+{question}
+"""
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    """Parse a JSON object, allowing a model to wrap it in extra text."""
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise
+        parsed = json.loads(text[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("semantic classifier response was not a JSON object")
+    return parsed
+
+
+def _classify_with_ollama(question: str) -> SemanticRiskResult:
+    """Call local Ollama and parse the strict JSON risk classification."""
+    payload = {
+        "model": settings.ollama_risk_model,
+        "prompt": SEMANTIC_PROMPT_TEMPLATE.format(question=question),
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": 0},
+    }
+    data = json.dumps(payload).encode("utf-8")
+    url = f"{settings.ollama_base_url.rstrip('/')}/api/generate"
+    req = request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with request.urlopen(req, timeout=settings.ollama_timeout_seconds) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+
+    raw_response = body.get("response")
+    if not isinstance(raw_response, str) or not raw_response.strip():
+        raise ValueError("Ollama response did not include a response string")
+
+    parsed = _extract_json_object(raw_response)
+    risk = str(parsed.get("risk", "")).strip().lower()
+    if risk not in {"emergency", "non_urgent", "uncertain"}:
+        raise ValueError(f"invalid semantic risk value: {risk!r}")
+
+    confidence = float(parsed.get("confidence", 0.0))
+    confidence = max(0.0, min(1.0, confidence))
+    concepts = parsed.get("matched_concepts", [])
+    if not isinstance(concepts, list):
+        concepts = []
+    matched_concepts = [str(c) for c in concepts if str(c).strip()]
+    reason = str(parsed.get("reason", "")).strip()
+    return SemanticRiskResult(
+        risk=risk,
+        confidence=confidence,
+        matched_concepts=matched_concepts,
+        reason=reason,
+    )
 
 
 def check_guardrails(question: str) -> GuardrailResult:
     matched = [c.pattern for c in _COMPILED if c.search(question)]
     if matched:
         return GuardrailResult(
-            triggered=True, matched_terms=matched, message=ESCALATION_MESSAGE
+            triggered=True,
+            matched_terms=matched,
+            message=ESCALATION_MESSAGE,
+            source="regex",
         )
-    return GuardrailResult(triggered=False, matched_terms=[])
+
+    if not settings.semantic_guardrail_enabled:
+        return GuardrailResult(triggered=False, matched_terms=[], source="none")
+
+    try:
+        semantic = _classify_with_ollama(question)
+    except (
+        OSError,
+        TimeoutError,
+        ValueError,
+        json.JSONDecodeError,
+        error.URLError,
+        error.HTTPError,
+    ) as exc:
+        return GuardrailResult(
+            triggered=False,
+            matched_terms=[],
+            source="none",
+            semantic_error=f"{type(exc).__name__}: {exc}",
+        )
+
+    should_escalate = (
+        semantic.risk == "emergency"
+        and semantic.confidence >= settings.semantic_risk_threshold
+    )
+    return GuardrailResult(
+        triggered=should_escalate,
+        matched_terms=semantic.matched_concepts,
+        message=ESCALATION_MESSAGE if should_escalate else None,
+        source="semantic" if should_escalate else "none",
+        semantic_risk=semantic.risk,
+        semantic_confidence=round(semantic.confidence, 4),
+        semantic_reason=semantic.reason,
+    )

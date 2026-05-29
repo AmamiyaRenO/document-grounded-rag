@@ -58,6 +58,16 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.2
     llm_max_tokens: int = 500
 
+    # --- Safety guardrail semantic classifier ---------------------------------
+    # Regex remains the deterministic hard gate. When enabled, this optional
+    # offline classifier runs only after regex does not match, and fails open if
+    # Ollama is unavailable or returns malformed output.
+    semantic_guardrail_enabled: bool = True
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_risk_model: str = "qwen3:8b"
+    ollama_timeout_seconds: float = 8.0
+    semantic_risk_threshold: float = 0.75
+
     @property
     def llm_enabled(self) -> bool:
         return bool(self.openai_api_key)

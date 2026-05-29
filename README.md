@@ -19,7 +19,7 @@ A single endpoint, `POST /ask`, runs each question through a safety-first pipeli
 question
    │
    ▼
-1. Safety guardrail ──(urgent symptom? )──► escalation message, no retrieval/LLM
+1. Safety guardrail ──(regex or semantic emergency risk?)──► escalation message, no retrieval/LLM
    │ no
    ▼
 2. Retrieve top-k chunks (local embeddings + FAISS, cosine similarity)
@@ -58,7 +58,7 @@ the system runs fully offline using a deterministic fallback when no key is pres
 # 1. Install dependencies into a local virtual environment
 uv sync --extra dev
 
-# 2. (Optional) enable LLM-generated answers
+# 2. (Optional) enable LLM-generated answers and configure Ollama settings
 cp .env.example .env          # then put your key in OPENAI_API_KEY=...
 
 # 3. Run the API (first start downloads the ~80 MB embedding model once)
@@ -79,6 +79,19 @@ curl -s -X POST http://127.0.0.1:8000/ask \
 Invoke-RestMethod -Uri http://127.0.0.1:8000/ask -Method Post `
   -ContentType "application/json" `
   -Body '{"question": "What is HFpEF?"}'
+```
+
+Optional local semantic safety classifier:
+
+```bash
+# The semantic guardrail is enabled by default and uses local Ollama.
+# Regex still runs first; if Ollama is unavailable, the classifier fails open.
+ollama pull qwen3:8b
+
+# Optional .env overrides:
+# HFPEF_SEMANTIC_GUARDRAIL_ENABLED=true
+# HFPEF_OLLAMA_BASE_URL=http://127.0.0.1:11434
+# HFPEF_OLLAMA_RISK_MODEL=qwen3:8b
 ```
 
 Other useful commands:
@@ -138,19 +151,28 @@ the top while off-topic or vague questions top out below ~0.40, giving a clean s
 ## How the safety guardrails work
 
 Implemented in [`hfpef_rag/guardrails.py`](hfpef_rag/guardrails.py). Before any retrieval or
-LLM call, the raw question is matched against a curated list of word-boundary regex patterns
-for emergency / high-risk symptoms: chest pain or pressure, severe shortness of breath /
-"can't breathe", fainting or passing out, severe or sudden dizziness, stroke signs (face
-drooping, sudden weakness/numbness, slurred speech), coughing up blood, blue lips, severe
-allergic reaction, suicidal ideation, and explicit "should I go to the ER" phrasing.
+LLM call, the system applies two safety layers:
+
+1. **Regex hard gate:** the raw question is matched against a curated list of word-boundary
+regex patterns for emergency / high-risk symptoms: chest pain or pressure, severe shortness
+of breath / "can't breathe", fainting or passing out, severe or sudden dizziness, stroke
+signs (face drooping, sudden weakness/numbness, slurred speech), coughing up blood, blue
+lips, severe allergic reaction, suicidal ideation, and explicit "should I go to the ER"
+phrasing.
+2. **Offline semantic risk classifier:** if regex does not match and
+`HFPEF_SEMANTIC_GUARDRAIL_ENABLED=true`, the app calls local Ollama (`qwen3:8b` by default)
+to classify whether the wording implies current or imminent emergency risk. It triggers only
+for `risk=emergency` with confidence at or above `HFPEF_SEMANTIC_RISK_THRESHOLD` (default
+`0.75`). If Ollama is unavailable, times out, or returns malformed JSON, the classifier
+fails open and the normal RAG flow continues.
 
 On a match the pipeline **short-circuits**: it returns a fixed escalation message telling the
 user to call their local emergency number or seek urgent care, sets `guardrail_triggered:
 true`, and returns empty `evidence_used` — it never produces medical advice for these cases.
 
-This is deliberately a simple, auditable matcher. It does not understand negation
-(e.g. "I do *not* have chest pain"), so it is biased toward over-escalation — the safer error
-for a health assistant.
+The semantic classifier is an optional prototype enhancement, not medical-grade triage. It can
+catch paraphrases that regex misses, but it can still misclassify and depends on local model
+availability.
 
 ---
 
@@ -165,7 +187,8 @@ contains:
 - `question` (the user's text)
 - `retrieved` — document IDs, chunk IDs, titles, and similarity scores
 - `evidence_sufficient` and `evidence_reason` (and `best_score`)
-- `guardrail_triggered` (and `guardrail_matched_terms` when it fires)
+- `guardrail_triggered`, `guardrail_source`, and matched terms when a safety layer fires
+- semantic guardrail details when available: model, risk label, confidence, reason, or error
 - `answer` (the final response text)
 - `model_name` — e.g. `openai:gpt-4o-mini` or `deterministic-template-fallback`
 - `prompt_summary` — a short description of the prompt template, when an LLM was used
@@ -188,7 +211,7 @@ Live outputs for all five required scenarios are in
 | 5 | Vague / ambiguous | "What about my heart?" | safe refusal, no false escalation |
 
 The automated suite (`tests/`) asserts these behaviors plus guardrail, evidence-gate,
-chunking, and logging unit tests (20 tests, all passing, fully offline).
+chunking, and logging unit tests (28 tests, all passing, fully offline).
 
 ---
 
@@ -202,7 +225,7 @@ hfpef-rag/
     embeddings.py       # sentence-transformers wrapper (L2-normalized)
     vector_store.py     # FAISS index build + cosine search
     retriever.py        # singleton store; embed query -> top-k chunks
-    guardrails.py       # urgent-symptom detection
+    guardrails.py       # regex + optional Ollama semantic urgent-risk detection
     evidence.py         # evidence sufficiency gate
     generator.py        # OpenAI grounded answer + deterministic fallback
     logging_store.py    # JSONL research log
@@ -227,8 +250,8 @@ hfpef-rag/
   and passes the gate even though supplements aren't discussed). A pure-similarity gate can't
   catch this; the LLM prompt is the second line of defense, but the deterministic fallback is
   not.
-- **Keyword guardrail.** Regex-based, with no negation or context handling — intentionally
-  biased toward over-escalation.
+- **Prototype guardrails.** Regex is auditable but shallow, while the optional Ollama/Qwen
+  classifier can still misclassify, may add latency, and depends on local model availability.
 - **Deterministic fallback is extractive.** Without an API key, answers are stitched-together
   sentences ranked by keyword overlap — grounded and cited, but not as fluent or as
   faithfully synthesized as the LLM path.
@@ -260,14 +283,11 @@ hfpef-rag/
 
 ## AI Tool Use Disclosure
 
-> _Candidate: please review and edit this section so it accurately reflects your own process
-> before submitting._
-
-- **Tools used:** Claude Code (Anthropic) was used as a pair-programming/coding assistant
-  during development.
+- **Tools used:** Claude Code (Anthropic) and Codex / ChatGPT were used as
+  AI-assisted planning and pair-programming tools during development.
 - **What it was used for:** scaffolding the project structure, drafting the FastAPI
   boilerplate, the chunking/retrieval/guardrail/evidence/logging modules, the sample
-  documents, the test suite, and this README.
+  documents, the test suite, reviewing the implementation plan, and drafting this README.
 - **Which parts were AI-assisted:** essentially all of the initial code, sample documents, and
   documentation drafts were AI-assisted.
 - **What I personally reviewed, modified, and validated:** I reviewed and understand every

@@ -10,8 +10,9 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from hfpef_rag import logging_store
+from hfpef_rag import config, guardrails, logging_store
 from hfpef_rag.app import app
+from hfpef_rag.guardrails import SemanticRiskResult
 
 
 @pytest.fixture(scope="module")
@@ -100,7 +101,36 @@ def test_each_query_appends_a_log_record(client):
         "retrieved",
         "evidence_sufficient",
         "guardrail_triggered",
+        "guardrail_source",
         "answer",
         "model_name",
     ):
         assert key in record
+
+
+def test_semantic_guardrail_escalates_and_logs_metadata(client, monkeypatch):
+    monkeypatch.setattr(config.settings, "semantic_guardrail_enabled", True)
+    monkeypatch.setattr(config.settings, "ollama_risk_model", "qwen3:8b")
+
+    def classify(question):
+        return SemanticRiskResult(
+            risk="emergency",
+            confidence=0.93,
+            matched_concepts=["crushing chest pressure"],
+            reason="Potential current emergency symptom.",
+        )
+
+    monkeypatch.setattr(guardrails, "_classify_with_ollama", classify)
+
+    body = _ask(client, "It feels like a crushing weight on my chest.")
+
+    _assert_schema(body)
+    assert body["guardrail_triggered"] is True
+    assert body["evidence_sufficient"] is False
+    assert body["evidence_used"] == []
+
+    record = json.loads(logging_store.LOG_FILE.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["guardrail_source"] == "semantic"
+    assert record["semantic_guardrail_model"] == "qwen3:8b"
+    assert record["semantic_guardrail_risk"] == "emergency"
+    assert record["semantic_guardrail_confidence"] == 0.93

@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 import uuid
 
+from .config import settings
 from .evidence import INSUFFICIENT_MESSAGE, assess_evidence
 from .generator import generate_answer
 from .guardrails import check_guardrails
@@ -27,6 +28,25 @@ def _evidence_items(results: list[RetrievedChunk]) -> list[EvidenceItem]:
         )
         for r in results
     ]
+
+
+def _guardrail_log_fields(guardrail) -> dict[str, object]:
+    fields: dict[str, object] = {
+        "guardrail_source": guardrail.source,
+    }
+    if guardrail.matched_terms:
+        fields["guardrail_matched_terms"] = guardrail.matched_terms
+    if guardrail.semantic_risk is not None or guardrail.semantic_error:
+        fields["semantic_guardrail_model"] = settings.ollama_risk_model
+    if guardrail.semantic_risk is not None:
+        fields["semantic_guardrail_risk"] = guardrail.semantic_risk
+    if guardrail.semantic_confidence is not None:
+        fields["semantic_guardrail_confidence"] = guardrail.semantic_confidence
+    if guardrail.semantic_reason:
+        fields["semantic_guardrail_reason"] = guardrail.semantic_reason
+    if guardrail.semantic_error:
+        fields["semantic_guardrail_error"] = guardrail.semantic_error
+    return fields
 
 
 def answer_question(question: str) -> AskResponse:
@@ -54,7 +74,7 @@ def answer_question(question: str) -> AskResponse:
                 "evidence_sufficient": False,
                 "evidence_reason": "guardrail_short_circuit",
                 "guardrail_triggered": True,
-                "guardrail_matched_terms": guardrail.matched_terms,
+                **_guardrail_log_fields(guardrail),
                 "answer": response.answer,
                 "model_name": None,
                 "prompt_summary": None,
@@ -92,6 +112,7 @@ def answer_question(question: str) -> AskResponse:
                 "evidence_reason": decision.reason,
                 "best_score": decision.best_score,
                 "guardrail_triggered": False,
+                **_guardrail_log_fields(guardrail),
                 "answer": response.answer,
                 "model_name": None,
                 "prompt_summary": None,
@@ -118,6 +139,7 @@ def answer_question(question: str) -> AskResponse:
             "evidence_reason": decision.reason,
             "best_score": decision.best_score,
             "guardrail_triggered": False,
+            **_guardrail_log_fields(guardrail),
             "answer": response.answer,
             "model_name": generation.model_name,
             "prompt_summary": generation.prompt_summary,

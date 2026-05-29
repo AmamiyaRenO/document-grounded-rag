@@ -106,6 +106,7 @@ _STOPWORDS = {
 
 def _clean_markdown(text: str) -> str:
     text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)  # headings
+    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)  # lists
     text = re.sub(r"[*_`>]", "", text)  # emphasis / quotes / code
     text = re.sub(r"\s+", " ", text)
     return text.strip()
@@ -119,6 +120,18 @@ def _tokens(text: str) -> set[str]:
     }
 
 
+def _definition_bonus(question: str, sentence: str) -> int:
+    """Prefer definitional sentences for questions like "What is HFpEF?"."""
+    lowered_question = question.lower()
+    lowered_sentence = sentence.lower()
+    asks_definition = re.search(r"\bwhat\s+(is|are)\b", lowered_question)
+    looks_definitional = re.search(
+        r"\b(is|are)\s+(a|an)\s+(type|condition|form|kind)\b|\bmeans\b|\brefers to\b",
+        lowered_sentence,
+    )
+    return 1 if asks_definition and looks_definitional else 0
+
+
 def _generate_deterministic(question: str, results: list[RetrievedChunk]) -> str:
     """Extractive fallback: pick the retrieved sentences most relevant to the question.
 
@@ -128,7 +141,7 @@ def _generate_deterministic(question: str, results: list[RetrievedChunk]) -> str
     documents' standing disclaimers.
     """
     query_terms = _tokens(question)
-    candidates: list[tuple[int, int, str, str, str]] = []  # (overlap, order, sent, doc, chunk)
+    candidates: list[tuple[int, int, float, int, str, str, str]] = []
     order = 0
     for r in results[: min(3, len(results))]:
         for sentence in _SENTENCE_SPLIT.split(_clean_markdown(r.chunk.text)):
@@ -138,7 +151,15 @@ def _generate_deterministic(question: str, results: list[RetrievedChunk]) -> str
                 continue
             overlap = len(query_terms & _tokens(sentence))
             candidates.append(
-                (overlap, order, sentence, r.chunk.document_id, r.chunk.chunk_id)
+                (
+                    overlap,
+                    _definition_bonus(question, sentence),
+                    r.similarity_score,
+                    order,
+                    sentence,
+                    r.chunk.document_id,
+                    r.chunk.chunk_id,
+                )
             )
 
     if not candidates:
@@ -147,12 +168,10 @@ def _generate_deterministic(question: str, results: list[RetrievedChunk]) -> str
             "- I could not extract a clear, relevant statement from the retrieved text."
         )
 
-    # Rank by question overlap, then reading order; keep the best handful.
-    ranked = sorted(candidates, key=lambda c: (-c[0], c[1]))[:5]
-    # Present in reading order for a natural flow.
-    ranked.sort(key=lambda c: c[1])
+    # Rank by question overlap, definition fit, retrieval score, then reading order.
+    ranked = sorted(candidates, key=lambda c: (-c[0], -c[1], -c[2], c[3]))[:5]
 
-    bullets = [f"- {sent} [{doc}/{chunk}]" for _, _, sent, doc, chunk in ranked]
+    bullets = [f"- {sent} [{doc}/{chunk}]" for _, _, _, _, sent, doc, chunk in ranked]
     intro = "Here is what my reference documents say that relates to your question:\n\n"
     return intro + "\n".join(bullets)
 
