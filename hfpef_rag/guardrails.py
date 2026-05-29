@@ -27,6 +27,9 @@ _URGENT_PATTERNS: list[str] = [
     r"chest tightness",
     r"chest discomfort",
     r"pressure in (my )?chest",
+    r"crushing (weight|pressure|pain)",
+    r"chest feels crushed",
+    r"chest (feels )?(crushed|heavy)",
     r"severe shortness of breath",
     r"can('|no)?t breathe",
     r"cannot breathe",
@@ -59,6 +62,11 @@ _URGENT_PATTERNS: list[str] = [
 ]
 
 _COMPILED = [re.compile(p, re.IGNORECASE) for p in _URGENT_PATTERNS]
+_NEGATION_WINDOW = re.compile(
+    r"(no|not|without|den(y|ies|ied)|do not have|don't have|does not have|doesn't have)\s+"
+    r"(\w+\s+){0,4}$",
+    re.IGNORECASE,
+)
 
 ESCALATION_MESSAGE = (
     "Your message mentions symptoms that can be a medical emergency. I can't provide "
@@ -167,7 +175,14 @@ def _classify_with_ollama(question: str) -> SemanticRiskResult:
 
 
 def check_guardrails(question: str) -> GuardrailResult:
-    matched = [c.pattern for c in _COMPILED if c.search(question)]
+    matched = []
+    for c in _COMPILED:
+        for match in c.finditer(question):
+            prefix = question[max(0, match.start() - 60) : match.start()]
+            if _NEGATION_WINDOW.search(prefix):
+                continue
+            matched.append(c.pattern)
+            break
     if matched:
         return GuardrailResult(
             triggered=True,

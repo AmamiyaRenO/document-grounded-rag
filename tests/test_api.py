@@ -126,7 +126,7 @@ def test_semantic_guardrail_escalates_and_logs_metadata(client, monkeypatch):
 
     monkeypatch.setattr(guardrails, "_classify_with_ollama", classify)
 
-    body = _ask(client, "It feels like a crushing weight on my chest.")
+    body = _ask(client, "It feels like an elephant is sitting on my chest.")
 
     _assert_schema(body)
     assert body["guardrail_triggered"] is True

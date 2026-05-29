@@ -15,6 +15,7 @@ URGENT = [
     "I'm having sudden weakness on one side and slurred speech",
     "I feel severe dizziness and chest pressure",
     "Should I go to the ER?",
+    "My chest feels crushed and I'm sweating.",
 ]
 
 NON_URGENT = [
@@ -22,6 +23,7 @@ NON_URGENT = [
     "What should I ask my doctor about HFpEF treatment options?",
     "How does a low-sodium diet help with heart failure?",
     "What is cardiovascular-kidney-metabolic syndrome?",
+    "I do not have chest pain. What symptoms should I watch for?",
 ]
 
 
@@ -69,7 +71,7 @@ def test_semantic_classifier_can_trigger_for_emergency_paraphrase(monkeypatch):
 
     monkeypatch.setattr(guardrails, "_classify_with_ollama", classify)
 
-    result = check_guardrails("It feels like a crushing weight on my chest.")
+    result = check_guardrails("It feels like an elephant is sitting on my chest.")
 
     assert result.triggered is True
     assert result.source == "semantic"

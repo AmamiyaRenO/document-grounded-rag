@@ -8,6 +8,10 @@ When a key is configured, the `answer` text is instead written by the LLM
 
 Regenerate these with: `uv run python scripts/run_examples.py`
 
+For a broader 19-question boundary evaluation set, see
+[`docs/boundary_cases.md`](boundary_cases.md) or run
+`uv run python scripts/run_boundary_cases.py`.
+
 ---
 
 ## 1. General HFpEF education
