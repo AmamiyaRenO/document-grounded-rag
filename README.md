@@ -295,20 +295,83 @@ hfpef-rag/
 
 ## What I would improve over a 4-month project
 
-- **Better evidence gate:** combine similarity with an LLM-based "is this actually answered by
-  the evidence?" check (or a cross-encoder re-ranker) so topically-close-but-unanswered
-  questions are refused; add a citation-faithfulness / groundedness check on generated text.
-- **Smarter guardrails:** move from regex to a calibrated classifier with negation handling
-  and a clinically reviewed red-flag taxonomy; add escalation tiers (emergency vs. "call your
-  clinician soon").
-- **Retrieval quality:** larger, clinician-curated and versioned corpus; semantic + keyword
-  hybrid search; query rewriting and clarification for vague questions.
-- **Evaluation & safety:** a labeled eval set with retrieval and answer-quality metrics, red-
-  team prompts, and regression tests; human-in-the-loop review of logs.
-- **Productionization:** persistent vector DB, auth, rate limiting, PII-aware logging,
-  observability/tracing, containerization, and CI.
-- **Clinical governance:** formal source-of-truth management, review workflow, and
-  disclaimers vetted by medical and legal stakeholders.
+### 1. Build a boundary-focused evaluation set
+
+The first priority would be to expand evaluation beyond the five required examples. I would
+create a labeled set of normal, off-topic, vague, personalized-medical-advice,
+topical-but-unanswered, emergency, negated-emergency, paraphrased-emergency, and multilingual
+questions.
+
+The goal would not be to show only happy-path performance. It would be to make the current
+capability boundary explicit: where retrieval works, where similarity-based evidence gating
+fails, where the regex guardrail over-escalates or misses paraphrases, and where generated
+answers need stronger citation validation.
+
+### 2. Strengthen evidence sufficiency with answerability checking
+
+The current evidence gate uses embedding similarity thresholds. This is auditable and
+deterministic, but semantic similarity does not always mean the evidence actually answers the
+question. For example, a question about whether HFpEF can be cured with vitamin supplements
+may be close to treatment documents but not directly answered by them.
+
+I would add a second-stage answerability check after retrieval: first use similarity
+thresholds to reject clearly weak evidence, then use a structured LLM or local model judge to
+decide whether the retrieved chunks directly answer the specific question. The judge would
+output a small schema such as `answerable`, `reason`, and `missing_information`, and the
+decision would be logged for review.
+
+### 3. Improve safety guardrails with layered triage
+
+The current guardrail uses a deterministic regex hard gate plus an optional local semantic
+classifier. I would keep regex as a hard stop for obvious emergency phrases because it is
+fast, auditable, and testable. However, I would strengthen the semantic triage layer to handle
+paraphrases, negation, hypothetical questions, and severity tiers.
+
+A stronger system would classify messages into `emergency`, `urgent`, `routine`, or `none`,
+and would distinguish current symptoms from general education questions. The red-flag
+taxonomy should be reviewed by clinical collaborators, especially for heart-failure-related
+symptoms such as severe shortness of breath, chest pressure, fainting, stroke signs, and
+fluid-overload warning signs.
+
+### 4. Add grounded generation validation
+
+The current prompt instructs the LLM to answer only from evidence, but prompt instructions
+alone are not a guarantee. I would add post-generation checks for citation coverage and
+answer-evidence alignment.
+
+A practical version would verify that each major claim in the answer is supported by at least
+one retrieved chunk, require citations in the final answer, and flag unsupported claims for
+refusal or regeneration. For higher-risk questions, the system could use sentence-level
+support checking or quote/span attribution.
+
+### 5. Improve retrieval and source quality
+
+The current corpus is intentionally small, so FAISS with MiniLM is enough for the prototype.
+A larger system would need clinician-curated, versioned documents and better retrieval
+quality.
+
+I would add hybrid retrieval using dense embeddings plus keyword search, cross-encoder
+reranking, metadata filtering by document type or topic, and query rewriting for vague
+questions. I would also maintain a source hierarchy so higher-quality clinical or
+patient-education sources are preferred over lower-priority material.
+
+### 6. Harden research logging, privacy, and deployment
+
+The current JSONL log is useful for a prototype, but a health setting requires stronger
+governance. I would define a structured event schema, add request tracing, redact or minimize
+PII/PHI before storage, encrypt logs at rest, define a retention policy, and support human
+review workflows.
+
+For deployment, I would add CI, containerization, observability, rate limiting,
+authentication, and persistent vector storage. I would also keep the local/no-key path
+available for reproducible testing.
+
+### 7. Add clinical governance
+
+For a real health assistant, technical safeguards are not enough. I would establish a source
+review process, document versioning, clinician review of red-flag logic and refusal behavior,
+and medical/legal review of disclaimers. The system should be evaluated not only for answer
+quality, but also for safe refusal, escalation behavior, and citation faithfulness.
 
 ---
 
