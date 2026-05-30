@@ -6,7 +6,7 @@ HFpEF (heart failure with preserved ejection fraction) and cardiovascular-kidney
 **refuses when the evidence is too weak**, **escalates urgent/high-risk questions** to
 emergency guidance instead of giving advice, and **logs every query** for research review.
 
-> ⚠️ This is an educational prototype, not a medical device. All bundled content is general
+> Safety note: This is an educational prototype, not a medical device. All bundled content is general
 > patient education paraphrased from public sources and is not advice for any individual.
 
 ---
@@ -17,24 +17,30 @@ A single endpoint, `POST /ask`, runs each question through a safety-first pipeli
 
 ```
 question
-   │
-   ▼
-1. Safety guardrail ──(regex or semantic emergency risk?)──► escalation message, no retrieval/LLM
-   │ no
-   ▼
+   |
+   v
+1. Safety guardrail -- regex or semantic emergency risk?
+   |-- yes --> escalation message, no retrieval/LLM
+   |
+   v
 2. Retrieve top-k chunks (local embeddings + FAISS, cosine similarity)
-   │
-   ▼
-3. Evidence sufficiency gate ──(too weak?)──► safe refusal, no fabricated answer
-   │ sufficient
-   ▼
-4. Optional answerability check ──(not answerable?)──► safe refusal
-   │ answerable
-   ▼
+   |
+   v
+3. Evidence sufficiency gate
+   |-- too weak --> safe refusal, no fabricated answer
+   |
+   v
+4. Optional answerability check
+   |-- not answerable --> safe refusal
+   |
+   v
 5. Generate grounded answer (OpenAI gpt-4o-mini, or deterministic fallback)
-   │
-   ▼
-6. Log the full record (JSONL)  ──►  return { answer, evidence_used, flags }
+   |
+   v
+6. Log the full record (JSONL)
+   |
+   v
+return { answer, evidence_used, flags }
 ```
 
 Response shape (matches the assignment spec):
@@ -100,10 +106,10 @@ ollama pull qwen3:8b
 Other useful commands:
 
 ```bash
-uv run pytest                              # run the test suite (offline, deterministic)
-uv run python scripts/run_examples.py      # print the 5 required example request/response pairs
-uv run python scripts/run_boundary_cases.py # print the expanded boundary-case matrix
-uv run python scripts/inspect_retrieval.py # print retrieval scores (used to calibrate thresholds)
+uv run pytest                               # run the test suite (offline, deterministic)
+uv run python scripts/run_examples.py       # print the 5 required example request/response pairs
+uv run python scripts/run_boundary_cases.py # print the expanded 19-question boundary matrix
+uv run python scripts/inspect_retrieval.py  # inspect retrieval scores for calibration/debugging
 ```
 
 Interactive API docs are available at `http://127.0.0.1:8000/docs` once the server is running.
@@ -145,6 +151,10 @@ the terms are related, but those chunks do not establish a vitamin cure. When
 optional answerability check after the similarity gate and before answer generation. If the
 LLM classifies the retrieved evidence as not answerable, the app returns the same safe
 refusal rather than generating from merely related text.
+
+This answerability layer is optional and requires `OPENAI_API_KEY`. If no key is configured
+or the check is disabled, the prototype keeps the fully offline behavior and relies on the
+similarity gate plus grounded generation/fallback.
 
 Thresholds live in [`hfpef_rag/config.py`](hfpef_rag/config.py) (overridable via `HFPEF_*`
 env vars) and were **calibrated against the bundled documents** using
@@ -212,7 +222,7 @@ contains:
 
 ## Required test cases
 
-Live outputs for all five required scenarios are in
+Live outputs for the five required scenarios are in
 [`docs/api_examples.md`](docs/api_examples.md) and are reproducible via
 `uv run python scripts/run_examples.py`. Summary:
 
@@ -227,8 +237,8 @@ Live outputs for all five required scenarios are in
 The automated suite (`tests/`) asserts these behaviors plus guardrail, evidence-gate,
 chunking, and logging unit tests (32 tests, all passing, fully offline).
 
-An expanded 19-question boundary evaluation set is included in
-[`docs/api_examples.md`](docs/api_examples.md) and can be regenerated with
+The same [`docs/api_examples.md`](docs/api_examples.md) file also includes an expanded
+19-question boundary evaluation set, which can be regenerated with
 `uv run python scripts/run_boundary_cases.py`. It includes negated symptoms, hypotheticals,
 paraphrased emergencies, individualized medication questions, off-corpus questions, vague
 questions, and an answerability failure demo.
@@ -247,14 +257,15 @@ hfpef-rag/
     retriever.py        # singleton store; embed query -> top-k chunks
     guardrails.py       # regex + optional Ollama semantic urgent-risk detection
     evidence.py         # evidence sufficiency gate
+    answerability.py    # optional LLM check that evidence answers the exact question
     generator.py        # OpenAI grounded answer + deterministic fallback
     logging_store.py    # JSONL research log
-    pipeline.py         # orchestration (guardrail -> retrieve -> gate -> generate -> log)
+    pipeline.py         # guardrail -> retrieve -> similarity gate -> answerability -> generate/refuse -> log
     schemas.py          # request/response models
     app.py              # FastAPI app, POST /ask
   data/docs/            # 5 sample patient-education documents
   docs/                 # api_examples.md, sample_research_log.jsonl
-  scripts/              # run_examples.py, inspect_retrieval.py
+  scripts/              # run_examples.py, run_boundary_cases.py, inspect_retrieval.py
   tests/                # pytest suite
 ```
 
