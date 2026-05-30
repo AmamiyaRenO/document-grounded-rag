@@ -60,14 +60,20 @@ Response shape (matches the assignment spec):
 
 ## How to run
 
-Requires **Python 3.10–3.12** and [`uv`](https://docs.astral.sh/uv/). No API key is needed —
-the system runs fully offline using a deterministic fallback when no key is present.
+Requires **Python 3.10–3.12** and [`uv`](https://docs.astral.sh/uv/). The intended LLM path
+uses OpenAI `gpt-4o-mini` for grounded answer generation, and the optional answerability
+judge also uses OpenAI when configured. To run that full path, set `OPENAI_API_KEY`.
+
+The repository can still run without an API key for review and testing: retrieval, FAISS
+search, regex/Ollama guardrails, and the deterministic extractive fallback all work locally.
+In that no-key mode, generated answers are less fluent and the OpenAI answerability check is
+skipped.
 
 ```bash
 # 1. Install dependencies into a local virtual environment
 uv sync --extra dev
 
-# 2. (Optional) enable LLM-generated answers and configure Ollama settings
+# 2. Enable GPT-generated answers / answerability checks, and configure Ollama settings
 cp .env.example .env          # then put your key in OPENAI_API_KEY=...
 
 # 3. Run the API (first start downloads the ~80 MB embedding model once)
@@ -120,9 +126,9 @@ Interactive API docs are available at `http://127.0.0.1:8000/docs` once the serv
 
 | Component | Choice | Why |
 |-----------|--------|-----|
-| Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (384-dim, **local**) | Runs with no API key, so retrieval and the offline fallback always work and tests need no mocks. |
+| Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (384-dim, **local**) | Runs with no API key, so retrieval and offline tests do not depend on an external embedding API. |
 | Vector store | **FAISS** `IndexFlatIP`, in-memory | Tiny corpus; built once at startup. Vectors are L2-normalized, so inner product **is** cosine similarity. |
-| Answer LLM | OpenAI `gpt-4o-mini` (optional) | Fluent, patient-friendly phrasing, strictly constrained to the retrieved evidence. Falls back to a deterministic extractive answer when no key is set. |
+| Answer LLM | OpenAI `gpt-4o-mini` when `OPENAI_API_KEY` is set | Fluent, patient-friendly phrasing, strictly constrained to the retrieved evidence. Falls back to a deterministic extractive answer only when no key is set or the API call fails. |
 
 Documents are split into ~700-character chunks (with ~100-character overlap) on paragraph
 boundaries. Each chunk gets a `document_id` (`doc_1`…`doc_5`, parsed from the filename) and a
@@ -153,8 +159,8 @@ LLM classifies the retrieved evidence as not answerable, the app returns the sam
 refusal rather than generating from merely related text.
 
 This answerability layer is optional and requires `OPENAI_API_KEY`. If no key is configured
-or the check is disabled, the prototype keeps the fully offline behavior and relies on the
-similarity gate plus grounded generation/fallback.
+or the check is disabled, the prototype uses the no-key fallback path and relies on the
+similarity gate plus grounded deterministic generation.
 
 Thresholds live in [`hfpef_rag/config.py`](hfpef_rag/config.py) (overridable via `HFPEF_*`
 env vars) and were **calibrated against the bundled documents** using
