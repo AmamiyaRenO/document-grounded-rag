@@ -295,118 +295,67 @@ hfpef-rag/
 
 ## What I would improve over a 4-month project
 
-### 1. Build a boundary-focused evaluation set
+### 1. Evaluation-first hardening
 
-The first priority would be to turn the current examples and JSONL logs into a labeled
-evaluation set. The prototype already includes cases that expose real boundaries:
-off-topic questions such as appendicitis and bicycle repair fail the similarity gate, vague
-questions such as "What about my heart?" fail safely, and emergency symptoms short-circuit
-before retrieval.
+I would start by turning the current API examples, boundary cases, and JSONL logs into a
+labeled evaluation set. The labels would cover the expected pipeline route: guardrail,
+similarity refusal, answerability refusal, grounded answer, or escalation.
 
-I would expand that into a versioned eval set covering normal education, off-topic, vague,
-personalized-medical-advice, topical-but-unanswered, emergency, negated-emergency,
-paraphrased-emergency, hypothetical-emergency, and multilingual questions. Each example would
-label the expected route through the current pipeline: regex/semantic guardrail, similarity
-gate, answerability gate, generation, or refusal.
+This matters because the current prototype already shows useful boundaries: vague questions
+fail safely, off-topic questions fail similarity, topical-but-unanswered questions expose the
+answerability gap, and emergency symptoms short-circuit before retrieval.
 
-The goal would not be to show only happy-path performance. It would be to make the current
-capability boundary explicit: where retrieval works, where similarity-based evidence gating
-fails, where the regex guardrail over-escalates or misses paraphrases, and where generated
-answers need stronger citation validation.
+### 2. Stronger evidence sufficiency and answerability
 
-### 2. Strengthen evidence sufficiency with answerability checking
+The current `evidence.py` gate uses simple similarity thresholds, which are auditable but
+incomplete. The vitamin-supplement example shows the main failure mode: semantic similarity
+does not always mean the evidence actually answers the question.
 
-The current `evidence.py` gate is deliberately simple: best score must clear `0.45`, and at
-least two chunks must clear `0.35`. That is auditable and deterministic, but the boundary
-examples show why it is not enough. "Can HFpEF be cured with vitamin supplements?" can
-retrieve HFpEF treatment chunks with a strong score even though the documents do not support
-a vitamin cure.
+I would make `answerability.py` a first-class second-stage judge, preferably with a structured
+schema such as `answerable`, `reason`, and `missing_information`. This should handle
+topical-but-unanswered questions and personalized medication requests rather than relying on
+near-threshold similarity scores to reject them.
 
-I would make `answerability.py` a first-class second-stage judge rather than an optional
-OpenAI-only enhancement. The flow would remain: use similarity thresholds to reject clearly
-weak evidence, then use a structured LLM or local model judge to decide whether the retrieved
-chunks directly answer the specific question. The judge would output `answerable`, `reason`,
-`missing_information`, and possibly `unsupported_claim_type`, and those fields would be used
-for both refusal and evaluation.
+### 3. Better safety triage
 
-I would also treat near-threshold personalized questions as a specific failure mode. Current
-boundary cases such as "Should I stop my diuretic if I feel better?", "What dose of
-empagliflozin should I take?", and "Is Ozempic better than SGLT2 inhibitors for me?" are
-mostly refused by thresholds today, but their scores are close enough that a larger corpus or
-different embedding model could let them through. They should be refused because the request
-is individualized medication advice, not merely because a score happened to fall below a
-threshold.
+The current `guardrails.py` uses regex first and optional local Ollama/Qwen semantic
+classification second. I would keep regex for obvious emergencies because it is fast and
+auditable, but improve semantic triage for negation, paraphrases, hypotheticals, and severity
+tiers.
 
-### 3. Improve safety guardrails with layered triage
+The target would be to distinguish `emergency`, `urgent`, `routine`, and `education-only`
+questions while logging which layer made the decision and whether the escalation was
+conservative.
 
-The current `guardrails.py` already uses a regex hard gate plus an optional local Ollama/Qwen
-semantic classifier. I would keep regex as a hard stop for obvious emergency phrases because
-it is fast, auditable, and testable. However, the boundary examples show where the next work
-is: negated symptoms should not escalate, paraphrases like "my chest feels crushed" should
-escalate, and hypothetical education questions may need a different response from first-person
-current symptoms.
+### 4. Grounded generation validation
 
-A stronger system would classify messages into `emergency`, `urgent`, `routine`, or `none`,
-and would distinguish current symptoms from general education questions. It should also log
-which layer fired, which concept matched, and whether the decision was conservative. The
-red-flag taxonomy should be reviewed by clinical collaborators, especially for
-heart-failure-related symptoms such as severe shortness of breath, chest pressure, fainting,
-stroke signs, and fluid-overload warning signs.
+The generator cites retrieved chunks, but prompt instructions alone are not enough. The logs
+show that even simple questions can retrieve a less ideal top chunk, so generated claims
+should be checked against evidence after generation.
 
-### 4. Add grounded generation validation
-
-The current generator returns cited answers, and the deterministic fallback keeps the system
-usable without an API key. The logs also show a real retrieval-quality issue: for "What is
-HFpEF?", the top chunk can come from the treatment document before the overview document.
-That is acceptable for a prototype because multiple chunks are cited, but it shows why final
-answers need support checking, not just prompt instructions.
-
-A practical version would verify that each major claim in the answer is supported by at least
-one retrieved chunk, require citations in the final answer, and flag unsupported claims for
-refusal or regeneration. For higher-risk questions, the system could use sentence-level
+I would add citation coverage and claim-support checks, with refusal or regeneration when
+important claims are unsupported. For higher-risk questions, I would consider sentence-level
 support checking or quote/span attribution.
 
-### 5. Improve retrieval and source quality
+### 5. Retrieval and corpus quality
 
 The current corpus is intentionally small, so FAISS with MiniLM is enough for the prototype.
-The current retrieval scores are useful for calibration, but they are corpus-specific:
-appendicitis lands below the primary threshold, vague questions score lower, and related
-treatment questions score high. A larger source set would likely blur those margins.
+The current thresholds are useful for calibration, but they are corpus-specific and may not
+hold as documents grow.
 
-I would add hybrid retrieval using dense embeddings plus keyword search, cross-encoder
-reranking, metadata filtering by document type or topic, and query rewriting for vague
-questions. I would also maintain a source hierarchy so higher-quality clinical or
-patient-education sources are preferred over lower-priority material. For example, overview
-questions should prefer overview/patient-education chunks, treatment questions should prefer
-treatment and "questions to ask your doctor" chunks, and safety questions should prefer
-warning-sign documents.
+With a larger corpus, I would add hybrid retrieval, cross-encoder reranking, metadata filters,
+query rewriting for vague questions, and a source hierarchy so overview, treatment, safety,
+and doctor-question documents are used in the right contexts.
 
-### 6. Harden research logging, privacy, and deployment
+### 6. Logging, privacy, and deployment
 
-The current JSONL log already records the important research trail: retrieved chunks, scores,
-guardrail source, answerability decision, final answer, model name, prompt summary, and
-latency. Over four months, I would turn that into a stable event schema with a review UI or
-analysis notebook so failures can be labeled and fed back into the eval set.
+The current JSONL logs already capture the research trail: retrieved chunks, scores,
+guardrail source, answerability decision, final answer, model, prompt summary, and latency. I
+would turn that into a stable event schema for review and evaluation.
 
-Because this is health-adjacent, I would also redact or minimize PII/PHI before storage,
-encrypt logs at rest, define a retention policy, and separate research logging from
-operational tracing. This is where request IDs, model versions, prompt versions, document
-versions, and threshold versions become important for reproducibility.
-
-For deployment, I would add CI, containerization, observability, rate limiting,
-authentication, and persistent vector storage. I would also keep the local/no-key path
-available for reproducible testing.
-
-### 7. Add clinical governance
-
-For a real health assistant, technical safeguards are not enough. I would establish a source
-review process, document versioning, clinician review of red-flag logic and refusal behavior,
-and medical/legal review of disclaimers. The system should be evaluated not only for answer
-quality, but also for safe refusal, escalation behavior, and citation faithfulness.
-
-I would also review the actual bundled documents with clinical collaborators. The prototype
-uses short patient-education summaries, which is appropriate for a take-home, but a real
-system needs explicit ownership of source freshness, source hierarchy, and update cadence.
+For deployment, I would add PII/PHI minimization, retention policy, CI, observability,
+auth/rate limiting, containerization, and persistent vector storage, while preserving the
+local/no-key test path.
 
 ---
 
