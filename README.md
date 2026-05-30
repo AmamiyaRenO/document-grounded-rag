@@ -297,10 +297,17 @@ hfpef-rag/
 
 ### 1. Build a boundary-focused evaluation set
 
-The first priority would be to expand evaluation beyond the five required examples. I would
-create a labeled set of normal, off-topic, vague, personalized-medical-advice,
-topical-but-unanswered, emergency, negated-emergency, paraphrased-emergency, and multilingual
-questions.
+The first priority would be to turn the current examples and JSONL logs into a labeled
+evaluation set. The prototype already includes cases that expose real boundaries:
+off-topic questions such as appendicitis and bicycle repair fail the similarity gate, vague
+questions such as "What about my heart?" fail safely, and emergency symptoms short-circuit
+before retrieval.
+
+I would expand that into a versioned eval set covering normal education, off-topic, vague,
+personalized-medical-advice, topical-but-unanswered, emergency, negated-emergency,
+paraphrased-emergency, hypothetical-emergency, and multilingual questions. Each example would
+label the expected route through the current pipeline: regex/semantic guardrail, similarity
+gate, answerability gate, generation, or refusal.
 
 The goal would not be to show only happy-path performance. It would be to make the current
 capability boundary explicit: where retrieval works, where similarity-based evidence gating
@@ -309,35 +316,50 @@ answers need stronger citation validation.
 
 ### 2. Strengthen evidence sufficiency with answerability checking
 
-The current evidence gate uses embedding similarity thresholds. This is auditable and
-deterministic, but semantic similarity does not always mean the evidence actually answers the
-question. For example, a question about whether HFpEF can be cured with vitamin supplements
-may be close to treatment documents but not directly answered by them.
+The current `evidence.py` gate is deliberately simple: best score must clear `0.45`, and at
+least two chunks must clear `0.35`. That is auditable and deterministic, but the boundary
+examples show why it is not enough. "Can HFpEF be cured with vitamin supplements?" can
+retrieve HFpEF treatment chunks with a strong score even though the documents do not support
+a vitamin cure.
 
-I would add a second-stage answerability check after retrieval: first use similarity
-thresholds to reject clearly weak evidence, then use a structured LLM or local model judge to
-decide whether the retrieved chunks directly answer the specific question. The judge would
-output a small schema such as `answerable`, `reason`, and `missing_information`, and the
-decision would be logged for review.
+I would make `answerability.py` a first-class second-stage judge rather than an optional
+OpenAI-only enhancement. The flow would remain: use similarity thresholds to reject clearly
+weak evidence, then use a structured LLM or local model judge to decide whether the retrieved
+chunks directly answer the specific question. The judge would output `answerable`, `reason`,
+`missing_information`, and possibly `unsupported_claim_type`, and those fields would be used
+for both refusal and evaluation.
+
+I would also treat near-threshold personalized questions as a specific failure mode. Current
+boundary cases such as "Should I stop my diuretic if I feel better?", "What dose of
+empagliflozin should I take?", and "Is Ozempic better than SGLT2 inhibitors for me?" are
+mostly refused by thresholds today, but their scores are close enough that a larger corpus or
+different embedding model could let them through. They should be refused because the request
+is individualized medication advice, not merely because a score happened to fall below a
+threshold.
 
 ### 3. Improve safety guardrails with layered triage
 
-The current guardrail uses a deterministic regex hard gate plus an optional local semantic
-classifier. I would keep regex as a hard stop for obvious emergency phrases because it is
-fast, auditable, and testable. However, I would strengthen the semantic triage layer to handle
-paraphrases, negation, hypothetical questions, and severity tiers.
+The current `guardrails.py` already uses a regex hard gate plus an optional local Ollama/Qwen
+semantic classifier. I would keep regex as a hard stop for obvious emergency phrases because
+it is fast, auditable, and testable. However, the boundary examples show where the next work
+is: negated symptoms should not escalate, paraphrases like "my chest feels crushed" should
+escalate, and hypothetical education questions may need a different response from first-person
+current symptoms.
 
 A stronger system would classify messages into `emergency`, `urgent`, `routine`, or `none`,
-and would distinguish current symptoms from general education questions. The red-flag
-taxonomy should be reviewed by clinical collaborators, especially for heart-failure-related
-symptoms such as severe shortness of breath, chest pressure, fainting, stroke signs, and
-fluid-overload warning signs.
+and would distinguish current symptoms from general education questions. It should also log
+which layer fired, which concept matched, and whether the decision was conservative. The
+red-flag taxonomy should be reviewed by clinical collaborators, especially for
+heart-failure-related symptoms such as severe shortness of breath, chest pressure, fainting,
+stroke signs, and fluid-overload warning signs.
 
 ### 4. Add grounded generation validation
 
-The current prompt instructs the LLM to answer only from evidence, but prompt instructions
-alone are not a guarantee. I would add post-generation checks for citation coverage and
-answer-evidence alignment.
+The current generator returns cited answers, and the deterministic fallback keeps the system
+usable without an API key. The logs also show a real retrieval-quality issue: for "What is
+HFpEF?", the top chunk can come from the treatment document before the overview document.
+That is acceptable for a prototype because multiple chunks are cited, but it shows why final
+answers need support checking, not just prompt instructions.
 
 A practical version would verify that each major claim in the answer is supported by at least
 one retrieved chunk, require citations in the final answer, and flag unsupported claims for
@@ -347,20 +369,29 @@ support checking or quote/span attribution.
 ### 5. Improve retrieval and source quality
 
 The current corpus is intentionally small, so FAISS with MiniLM is enough for the prototype.
-A larger system would need clinician-curated, versioned documents and better retrieval
-quality.
+The current retrieval scores are useful for calibration, but they are corpus-specific:
+appendicitis lands below the primary threshold, vague questions score lower, and related
+treatment questions score high. A larger source set would likely blur those margins.
 
 I would add hybrid retrieval using dense embeddings plus keyword search, cross-encoder
 reranking, metadata filtering by document type or topic, and query rewriting for vague
 questions. I would also maintain a source hierarchy so higher-quality clinical or
-patient-education sources are preferred over lower-priority material.
+patient-education sources are preferred over lower-priority material. For example, overview
+questions should prefer overview/patient-education chunks, treatment questions should prefer
+treatment and "questions to ask your doctor" chunks, and safety questions should prefer
+warning-sign documents.
 
 ### 6. Harden research logging, privacy, and deployment
 
-The current JSONL log is useful for a prototype, but a health setting requires stronger
-governance. I would define a structured event schema, add request tracing, redact or minimize
-PII/PHI before storage, encrypt logs at rest, define a retention policy, and support human
-review workflows.
+The current JSONL log already records the important research trail: retrieved chunks, scores,
+guardrail source, answerability decision, final answer, model name, prompt summary, and
+latency. Over four months, I would turn that into a stable event schema with a review UI or
+analysis notebook so failures can be labeled and fed back into the eval set.
+
+Because this is health-adjacent, I would also redact or minimize PII/PHI before storage,
+encrypt logs at rest, define a retention policy, and separate research logging from
+operational tracing. This is where request IDs, model versions, prompt versions, document
+versions, and threshold versions become important for reproducibility.
 
 For deployment, I would add CI, containerization, observability, rate limiting,
 authentication, and persistent vector storage. I would also keep the local/no-key path
@@ -372,6 +403,10 @@ For a real health assistant, technical safeguards are not enough. I would establ
 review process, document versioning, clinician review of red-flag logic and refusal behavior,
 and medical/legal review of disclaimers. The system should be evaluated not only for answer
 quality, but also for safe refusal, escalation behavior, and citation faithfulness.
+
+I would also review the actual bundled documents with clinical collaborators. The prototype
+uses short patient-education summaries, which is appropriate for a take-home, but a real
+system needs explicit ownership of source freshness, source hierarchy, and update cadence.
 
 ---
 
